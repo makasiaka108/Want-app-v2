@@ -11,25 +11,87 @@ import {
   Bell,
   TrendingDown,
   ArrowRight,
+  LoaderCircle,
+  Check,
 } from "lucide-react";
 
-const wishes = [
-  ["Oakley Sutro", 119, 115, 30, 94, "🕶️"],
-  ["Sony WH-1000XM6", 329, 320, 15, 91, "🎧"],
-  ["MacBook Pro 14", 2049, 1999, 11, 87, "💻"],
+type Wish = {
+  name: string;
+  price?: number;
+  target?: number;
+  discount?: number;
+  score?: number;
+  icon: string;
+  custom?: boolean;
+};
+
+const initialWishes: Wish[] = [
+  {
+    name: "Oakley Sutro",
+    price: 119,
+    target: 115,
+    discount: 30,
+    score: 94,
+    icon: "🕶️",
+  },
+  {
+    name: "Sony WH-1000XM6",
+    price: 329,
+    target: 320,
+    discount: 15,
+    score: 91,
+    icon: "🎧",
+  },
+  {
+    name: "MacBook Pro 14",
+    price: 2049,
+    target: 1999,
+    discount: 11,
+    score: 87,
+    icon: "💻",
+  },
 ];
 
 export default function Page() {
   const [tab, setTab] = useState("Home");
   const [query, setQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
+  const [wishes, setWishes] = useState<Wish[]>(initialWishes);
+
+  const [status, setStatus] = useState<
+    "idle" | "searching" | "added"
+  >("idle");
+
+  const [lastSearch, setLastSearch] = useState("");
 
   function handleSearch() {
     const cleanQuery = query.trim();
 
-    if (!cleanQuery) return;
+    if (!cleanQuery || status === "searching") return;
 
-    setSubmittedQuery(cleanQuery);
+    setLastSearch(cleanQuery);
+    setStatus("searching");
+
+    /*
+      Пока здесь имитируется короткая обработка запроса.
+      На следующем этапе вместо этого подключим API.
+    */
+
+    setTimeout(() => {
+      const newWish: Wish = {
+        name: cleanQuery,
+        icon: "✨",
+        custom: true,
+      };
+
+      setWishes((current) => [newWish, ...current]);
+
+      setStatus("added");
+      setQuery("");
+
+      setTimeout(() => {
+        setStatus("idle");
+      }, 2500);
+    }, 900);
   }
 
   return (
@@ -39,14 +101,16 @@ export default function Page() {
           <div className="logo">
             WANT<span>.</span>
           </div>
+
           <small>AI SHOPPING AGENT</small>
         </div>
 
         <div className="actions">
-          <button>
+          <button aria-label="Search">
             <Search />
           </button>
-          <button>
+
+          <button aria-label="Notifications">
             <Bell />
           </button>
         </div>
@@ -54,7 +118,8 @@ export default function Page() {
 
       <section className="hero">
         <label>
-          <Sparkles size={14} /> YOUR SHOPPING COPILOT
+          <Sparkles size={14} />
+          YOUR SHOPPING COPILOT
         </label>
 
         <h1>
@@ -62,8 +127,8 @@ export default function Page() {
         </h1>
 
         <p>
-          Tell WANT. what you're looking for. AI identifies the exact product,
-          tracks the market and finds the right moment to buy.
+          Tell WANT. what you're looking for. AI identifies the exact
+          product, tracks the market and finds the right moment to buy.
         </p>
 
         <div className="ask">
@@ -71,29 +136,50 @@ export default function Page() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleSearch();
+              if (e.key === "Enter") {
+                handleSearch();
+              }
             }}
-            placeholder='Try “I want Oakley sunglasses”'
+            placeholder='Try “I want Oakley sunglasses under €120”'
           />
 
-          <button onClick={handleSearch}>
-            <ArrowRight />
+          <button
+            onClick={handleSearch}
+            disabled={!query.trim() || status === "searching"}
+            aria-label="Submit"
+          >
+            {status === "searching" ? (
+              <LoaderCircle className="spin" />
+            ) : (
+              <ArrowRight />
+            )}
           </button>
         </div>
 
-        {submittedQuery && (
-          <div
-            style={{
-              marginTop: "16px",
-              padding: "16px",
-              border: "1px solid #7c3aed",
-              borderRadius: "16px",
-            }}
-          >
-            <small style={{ opacity: 0.6 }}>WANT IS SEARCHING FOR</small>
+        {status === "searching" && (
+          <div className="search-result">
+            <small>WANT IS ANALYZING</small>
 
-            <p style={{ marginTop: "6px" }}>
-              <strong>{submittedQuery}</strong>
+            <strong>{lastSearch}</strong>
+
+            <p>
+              Understanding the product, price target and shopping
+              intent...
+            </p>
+          </div>
+        )}
+
+        {status === "added" && (
+          <div className="search-result success">
+            <small>
+              <Check size={13} /> ADDED TO WISHES
+            </small>
+
+            <strong>{lastSearch}</strong>
+
+            <p>
+              Your request is now saved. Live product search will be
+              connected next.
             </p>
           </div>
         )}
@@ -101,7 +187,7 @@ export default function Page() {
 
       <section className="stats">
         <div>
-          <b>3</b>
+          <b>{wishes.length}</b>
           <span>Wishes tracked</span>
         </div>
 
@@ -122,27 +208,40 @@ export default function Page() {
       </div>
 
       <section className="cards">
-        {wishes.map((w: any, i) => (
-          <article key={w[0]}>
+        {wishes.map((wish, i) => (
+          <article key={`${wish.name}-${i}`}>
             <i>#{i + 1}</i>
 
-            <strong>{w[5]}</strong>
+            <strong>{wish.icon}</strong>
 
             <div>
-              <b>{w[0]}</b>
+              <b>{wish.name}</b>
 
-              <small>
-                Target €{w[2]} ·{" "}
-                <u>
-                  <TrendingDown size={12} />
-                  {w[3]}%
-                </u>
-              </small>
+              {wish.custom ? (
+                <small>Waiting for live product search</small>
+              ) : (
+                <small>
+                  Target €{wish.target} ·{" "}
+                  <u>
+                    <TrendingDown size={12} />
+                    {wish.discount}%
+                  </u>
+                </small>
+              )}
             </div>
 
             <aside>
-              <b>€{w[1]}</b>
-              <small>WANT SCORE {w[4]}</small>
+              {wish.custom ? (
+                <>
+                  <b>—</b>
+                  <small>NEW WISH</small>
+                </>
+              ) : (
+                <>
+                  <b>€{wish.price}</b>
+                  <small>WANT SCORE {wish.score}</small>
+                </>
+              )}
             </aside>
           </article>
         ))}
@@ -151,18 +250,21 @@ export default function Page() {
       <section className="insight">
         <div>
           <label>
-            <Sparkles size={13} /> AI INSIGHT
+            <Sparkles size={13} />
+            AI INSIGHT
           </label>
 
           <h2>Oakley is close to your target.</h2>
 
           <p>
-            Current price is only €4 above target and near its 90-day low.
+            Current price is only €4 above target and near its
+            90-day low.
           </p>
         </div>
 
         <button>
-          Check deals <ArrowRight size={15} />
+          Check deals
+          <ArrowRight size={15} />
         </button>
       </section>
 
@@ -189,14 +291,14 @@ export default function Page() {
           ["AI", Sparkles],
           ["Community", Users],
           ["Profile", User],
-        ].map(([n, I]: any) => (
+        ].map(([name, Icon]: any) => (
           <button
-            className={tab === n ? "active" : ""}
-            onClick={() => setTab(n)}
-            key={n}
+            className={tab === name ? "active" : ""}
+            onClick={() => setTab(name)}
+            key={name}
           >
-            <I />
-            <span>{n}</span>
+            <Icon />
+            <span>{name}</span>
           </button>
         ))}
       </nav>
