@@ -1,0 +1,1 @@
+# WANT.\n\nAI shopping agent MVP. Mobile-first wishlist, price targets, AI picks and community discovery.\n\n## Run\n`npm install`\n`npm run dev`\n
