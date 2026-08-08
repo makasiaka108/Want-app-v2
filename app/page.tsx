@@ -23,6 +23,18 @@ type Wish = {
   score?: number;
   icon: string;
   custom?: boolean;
+  link?: string;
+  source?: string;
+};
+
+type SearchResult = {
+  title?: string;
+  name?: string;
+  price?: number | string;
+  extracted_price?: number;
+  link?: string;
+  product_link?: string;
+  source?: string;
 };
 
 const initialWishes: Wish[] = [
@@ -52,46 +64,151 @@ const initialWishes: Wish[] = [
   },
 ];
 
+function parsePrice(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value
+    .replace(/\s/g, "")
+    .replace(/[^\d,.]/g, "");
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  let cleaned = normalized;
+
+  if (normalized.includes(",") && normalized.includes(".")) {
+    if (normalized.lastIndexOf(",") > normalized.lastIndexOf(".")) {
+      cleaned = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      cleaned = normalized.replace(/,/g, "");
+    }
+  } else if (normalized.includes(",")) {
+    cleaned = normalized.replace(",", ".");
+  }
+
+  const number = Number(cleaned);
+
+  return Number.isFinite(number) ? number : undefined;
+}
+
 export default function Page() {
   const [tab, setTab] = useState("Home");
   const [query, setQuery] = useState("");
   const [wishes, setWishes] = useState<Wish[]>(initialWishes);
 
   const [status, setStatus] = useState<
-    "idle" | "searching" | "added"
+    "idle" | "searching" | "added" | "error"
   >("idle");
 
   const [lastSearch, setLastSearch] = useState("");
+  const [message, setMessage] = useState("");
 
-  function handleSearch() {
+  async function handleSearch() {
     const cleanQuery = query.trim();
 
-    if (!cleanQuery || status === "searching") return;
+    if (!cleanQuery || status === "searching") {
+      return;
+    }
 
     setLastSearch(cleanQuery);
     setStatus("searching");
+    setMessage("");
 
-    /*
-      Пока здесь имитируется короткая обработка запроса.
-      На следующем этапе вместо этого подключим API.
-    */
+    try {
+      const response = await fetch("/api/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: cleanQuery,
+        }),
+      });
 
-    setTimeout(() => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            data?.message ||
+            "Product search failed."
+        );
+      }
+
+      const products: SearchResult[] = Array.isArray(data?.products)
+        ? data.products
+        : [];
+
+      if (products.length === 0) {
+        throw new Error(
+          "No matching products were found."
+        );
+      }
+
+      const rawResult = products[0];
+
+      const productName =
+        rawResult.title ||
+        rawResult.name ||
+        cleanQuery;
+
+      const productPrice =
+        typeof rawResult.extracted_price === "number"
+          ? rawResult.extracted_price
+          : parsePrice(rawResult.price);
+
+      const productLink =
+        rawResult.product_link ||
+        rawResult.link;
+
       const newWish: Wish = {
-        name: cleanQuery,
+        name: productName,
+        price: productPrice,
         icon: "✨",
         custom: true,
+        link: productLink,
+        source: rawResult.source,
       };
 
-      setWishes((current) => [newWish, ...current]);
+      setWishes((current) => [
+        newWish,
+        ...current,
+      ]);
 
       setStatus("added");
       setQuery("");
 
+      if (productPrice !== undefined) {
+        setMessage(
+          `Best result found for €${productPrice.toFixed(2)}.`
+        );
+      } else {
+        setMessage(
+          "Product found and added to your wishes."
+        );
+      }
+
       setTimeout(() => {
         setStatus("idle");
-      }, 2500);
-    }, 900);
+      }, 4000);
+    } catch (error) {
+      console.error("Search error:", error);
+
+      setStatus("error");
+
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while searching."
+      );
+    }
   }
 
   return (
@@ -158,13 +275,13 @@ export default function Page() {
 
         {status === "searching" && (
           <div className="search-result">
-            <small>WANT IS ANALYZING</small>
+            <small>WANT IS SEARCHING</small>
 
             <strong>{lastSearch}</strong>
 
             <p>
-              Understanding the product, price target and shopping
-              intent...
+              Searching live shopping results and comparing available
+              products...
             </p>
           </div>
         )}
@@ -172,15 +289,22 @@ export default function Page() {
         {status === "added" && (
           <div className="search-result success">
             <small>
-              <Check size={13} /> ADDED TO WISHES
+              <Check size={13} /> PRODUCT FOUND
             </small>
 
             <strong>{lastSearch}</strong>
 
-            <p>
-              Your request is now saved. Live product search will be
-              connected next.
-            </p>
+            <p>{message}</p>
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="search-result">
+            <small>SEARCH ERROR</small>
+
+            <strong>{lastSearch}</strong>
+
+            <p>{message}</p>
           </div>
         )}
       </section>
@@ -209,7 +333,21 @@ export default function Page() {
 
       <section className="cards">
         {wishes.map((wish, i) => (
-          <article key={`${wish.name}-${i}`}>
+          <article
+            key={`${wish.name}-${i}`}
+            onClick={() => {
+              if (wish.link) {
+                window.open(
+                  wish.link,
+                  "_blank",
+                  "noopener,noreferrer"
+                );
+              }
+            }}
+            style={{
+              cursor: wish.link ? "pointer" : "default",
+            }}
+          >
             <i>#{i + 1}</i>
 
             <strong>{wish.icon}</strong>
@@ -218,7 +356,11 @@ export default function Page() {
               <b>{wish.name}</b>
 
               {wish.custom ? (
-                <small>Waiting for live product search</small>
+                <small>
+                  {wish.source
+                    ? `Found at ${wish.source}`
+                    : "Live shopping result"}
+                </small>
               ) : (
                 <small>
                   Target €{wish.target} ·{" "}
@@ -233,13 +375,25 @@ export default function Page() {
             <aside>
               {wish.custom ? (
                 <>
-                  <b>—</b>
-                  <small>NEW WISH</small>
+                  <b>
+                    {wish.price !== undefined
+                      ? `€${wish.price.toFixed(2)}`
+                      : "—"}
+                  </b>
+
+                  <small>
+                    {wish.link
+                      ? "VIEW DEAL"
+                      : "LIVE RESULT"}
+                  </small>
                 </>
               ) : (
                 <>
                   <b>€{wish.price}</b>
-                  <small>WANT SCORE {wish.score}</small>
+
+                  <small>
+                    WANT SCORE {wish.score}
+                  </small>
                 </>
               )}
             </aside>
@@ -254,7 +408,9 @@ export default function Page() {
             AI INSIGHT
           </label>
 
-          <h2>Oakley is close to your target.</h2>
+          <h2>
+            Oakley is close to your target.
+          </h2>
 
           <p>
             Current price is only €4 above target and near its
@@ -278,7 +434,10 @@ export default function Page() {
 
         <div>
           <b>1,284 people want this</b>
-          <small>Trending products & shared deals</small>
+
+          <small>
+            Trending products & shared deals
+          </small>
         </div>
 
         <button>+</button>
