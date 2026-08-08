@@ -13,7 +13,20 @@ import {
   ArrowRight,
   LoaderCircle,
   Check,
+  ExternalLink,
 } from "lucide-react";
+
+type Product = {
+  title?: string;
+  price?: string;
+  extracted_price?: number;
+  source?: string;
+  link?: string;
+  product_link?: string;
+  thumbnail?: string;
+  rating?: number;
+  reviews?: number;
+};
 
 type Wish = {
   name: string;
@@ -23,18 +36,11 @@ type Wish = {
   score?: number;
   icon: string;
   custom?: boolean;
-  link?: string;
-  source?: string;
-};
 
-type SearchResult = {
-  title?: string;
-  name?: string;
-  price?: number | string;
-  extracted_price?: number;
-  link?: string;
-  product_link?: string;
   source?: string;
+  link?: string;
+  image?: string;
+  underBudget?: boolean;
 };
 
 const initialWishes: Wish[] = [
@@ -64,51 +70,154 @@ const initialWishes: Wish[] = [
   },
 ];
 
-function parsePrice(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
+function extractBudget(text: string) {
+  const patterns = [
+    /under\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /below\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /less\s+than\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /max(?:imum)?\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /up\s+to\s*€?\s*(\d+(?:[.,]\d+)?)/i,
 
-  if (typeof value !== "string") {
-    return undefined;
-  }
+    /до\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /не\s+дороже\s*€?\s*(\d+(?:[.,]\d+)?)/i,
+    /дешевле\s*€?\s*(\d+(?:[.,]\d+)?)/i,
 
-  const normalized = value
-    .replace(/\s/g, "")
-    .replace(/[^\d,.]/g, "");
+    /€\s*(\d+(?:[.,]\d+)?)\s*(?:or less|max)/i,
+  ];
 
-  if (!normalized) {
-    return undefined;
-  }
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
 
-  let cleaned = normalized;
-
-  if (normalized.includes(",") && normalized.includes(".")) {
-    if (normalized.lastIndexOf(",") > normalized.lastIndexOf(".")) {
-      cleaned = normalized.replace(/\./g, "").replace(",", ".");
-    } else {
-      cleaned = normalized.replace(/,/g, "");
+    if (match?.[1]) {
+      return Number(match[1].replace(",", "."));
     }
-  } else if (normalized.includes(",")) {
-    cleaned = normalized.replace(",", ".");
   }
 
-  const number = Number(cleaned);
+  return undefined;
+}
 
-  return Number.isFinite(number) ? number : undefined;
+function cleanProductQuery(text: string) {
+  return text
+    .replace(
+      /under\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /below\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /less\s+than\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /max(?:imum)?\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /up\s+to\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /до\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /не\s+дороже\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(
+      /дешевле\s*€?\s*\d+(?:[.,]\d+)?/gi,
+      ""
+    )
+    .replace(/^i\s+want\s+/i, "")
+    .replace(/^find\s+me\s+/i, "")
+    .replace(/^find\s+/i, "")
+    .replace(/^хочу\s+/i, "")
+    .replace(/^найди\s+(мне\s+)?/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getProductPrice(product: Product) {
+  if (
+    typeof product.extracted_price === "number" &&
+    Number.isFinite(product.extracted_price)
+  ) {
+    return product.extracted_price;
+  }
+
+  if (product.price) {
+    const cleaned = product.price
+      .replace(/[^\d,.-]/g, "")
+      .replace(",", ".");
+
+    const parsed = Number.parseFloat(cleaned);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function getProductLink(product: Product) {
+  return product.product_link || product.link;
+}
+
+function calculateScore(
+  price?: number,
+  budget?: number,
+  rating?: number
+) {
+  let score = 75;
+
+  if (price && budget) {
+    if (price <= budget) {
+      const saving = ((budget - price) / budget) * 100;
+      score += Math.min(15, saving);
+    } else {
+      const over = ((price - budget) / budget) * 100;
+      score -= Math.min(30, over);
+    }
+  }
+
+  if (rating) {
+    score += Math.max(0, rating - 4) * 10;
+  }
+
+  return Math.max(1, Math.min(99, Math.round(score)));
+}
+
+function formatPrice(price?: number) {
+  if (price === undefined) return "—";
+
+  return new Intl.NumberFormat("en-IE", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 2,
+  }).format(price);
 }
 
 export default function Page() {
   const [tab, setTab] = useState("Home");
   const [query, setQuery] = useState("");
-  const [wishes, setWishes] = useState<Wish[]>(initialWishes);
+  const [wishes, setWishes] =
+    useState<Wish[]>(initialWishes);
 
   const [status, setStatus] = useState<
     "idle" | "searching" | "added" | "error"
   >("idle");
 
   const [lastSearch, setLastSearch] = useState("");
-  const [message, setMessage] = useState("");
+  const [budget, setBudget] =
+    useState<number | undefined>();
+
+  const [searchResults, setSearchResults] =
+    useState<Product[]>([]);
+
+  const [errorMessage, setErrorMessage] = useState("");
 
   async function handleSearch() {
     const cleanQuery = query.trim();
@@ -117,9 +226,15 @@ export default function Page() {
       return;
     }
 
+    const detectedBudget = extractBudget(cleanQuery);
+    const productQuery =
+      cleanProductQuery(cleanQuery) || cleanQuery;
+
     setLastSearch(cleanQuery);
+    setBudget(detectedBudget);
     setStatus("searching");
-    setMessage("");
+    setSearchResults([]);
+    setErrorMessage("");
 
     try {
       const response = await fetch("/api/search", {
@@ -128,7 +243,7 @@ export default function Page() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: cleanQuery,
+          query: productQuery,
         }),
       });
 
@@ -136,80 +251,120 @@ export default function Page() {
 
       if (!response.ok) {
         throw new Error(
-          data?.error ||
-            data?.message ||
-            "Product search failed."
+          data?.error || "Product search failed"
         );
       }
 
-      const products: SearchResult[] = Array.isArray(data?.products)
-        ? data.products
-        : [];
+      const rawProducts: Product[] =
+        Array.isArray(data.products)
+          ? data.products
+          : [];
 
-      if (products.length === 0) {
-        throw new Error(
-          "No matching products were found."
+      const productsWithPrice = rawProducts
+        .map((product) => ({
+          ...product,
+          extracted_price:
+            getProductPrice(product),
+        }))
+        .filter(
+          (product) =>
+            typeof product.extracted_price === "number"
+        );
+
+      let rankedProducts = [...productsWithPrice];
+
+      if (detectedBudget !== undefined) {
+        rankedProducts.sort((a, b) => {
+          const aPrice =
+            a.extracted_price ?? Infinity;
+          const bPrice =
+            b.extracted_price ?? Infinity;
+
+          const aUnder =
+            aPrice <= detectedBudget;
+          const bUnder =
+            bPrice <= detectedBudget;
+
+          if (aUnder && !bUnder) return -1;
+          if (!aUnder && bUnder) return 1;
+
+          return aPrice - bPrice;
+        });
+      } else {
+        rankedProducts.sort(
+          (a, b) =>
+            (a.extracted_price ?? Infinity) -
+            (b.extracted_price ?? Infinity)
         );
       }
 
-      const rawResult = products[0];
+      const topProducts =
+        rankedProducts.slice(0, 5);
 
-      const productName =
-        rawResult.title ||
-        rawResult.name ||
-        cleanQuery;
+      setSearchResults(topProducts);
 
-      const productPrice =
-        typeof rawResult.extracted_price === "number"
-          ? rawResult.extracted_price
-          : parsePrice(rawResult.price);
+      const bestProduct = topProducts[0];
 
-      const productLink =
-        rawResult.product_link ||
-        rawResult.link;
+      if (!bestProduct) {
+        setStatus("error");
+        setErrorMessage(
+          "No matching shopping results were found."
+        );
+        return;
+      }
+
+      const bestPrice =
+        bestProduct.extracted_price;
 
       const newWish: Wish = {
-        name: productName,
-        price: productPrice,
+        name:
+          bestProduct.title ||
+          productQuery,
+        price: bestPrice,
+        target: detectedBudget,
+        score: calculateScore(
+          bestPrice,
+          detectedBudget,
+          bestProduct.rating
+        ),
         icon: "✨",
         custom: true,
-        link: productLink,
-        source: rawResult.source,
+        source:
+          bestProduct.source ||
+          "Online store",
+        link: getProductLink(bestProduct),
+        image: bestProduct.thumbnail,
+        underBudget:
+          detectedBudget !== undefined &&
+          bestPrice !== undefined
+            ? bestPrice <= detectedBudget
+            : undefined,
       };
 
       setWishes((current) => [
         newWish,
-        ...current,
+        ...current.filter(
+          (wish) =>
+            wish.name !== newWish.name
+        ),
       ]);
 
       setStatus("added");
       setQuery("");
-
-      if (productPrice !== undefined) {
-        setMessage(
-          `Best result found for €${productPrice.toFixed(2)}.`
-        );
-      } else {
-        setMessage(
-          "Product found and added to your wishes."
-        );
-      }
-
-      setTimeout(() => {
-        setStatus("idle");
-      }, 4000);
     } catch (error) {
-      console.error("Search error:", error);
+      console.error(error);
 
       setStatus("error");
 
-      setMessage(
+      setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Something went wrong while searching."
+          : "Failed to search products"
       );
     }
   }
+
+  const bestResult = searchResults[0];
 
   return (
     <main className="shell">
@@ -244,25 +399,32 @@ export default function Page() {
         </h1>
 
         <p>
-          Tell WANT. what you're looking for. AI identifies the exact
-          product, tracks the market and finds the right moment to buy.
+          Tell WANT. what you're looking for.
+          AI searches live shopping results,
+          compares prices and finds the best
+          option for your budget.
         </p>
 
         <div className="ask">
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) =>
+              setQuery(e.target.value)
+            }
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 handleSearch();
               }
             }}
-            placeholder='Try “I want Oakley sunglasses under €120”'
+            placeholder='Try “AirPods Pro 3 under €200”'
           />
 
           <button
             onClick={handleSearch}
-            disabled={!query.trim() || status === "searching"}
+            disabled={
+              !query.trim() ||
+              status === "searching"
+            }
             aria-label="Submit"
           >
             {status === "searching" ? (
@@ -275,39 +437,184 @@ export default function Page() {
 
         {status === "searching" && (
           <div className="search-result">
-            <small>WANT IS SEARCHING</small>
-
-            <strong>{lastSearch}</strong>
-
-            <p>
-              Searching live shopping results and comparing available
-              products...
-            </p>
-          </div>
-        )}
-
-        {status === "added" && (
-          <div className="search-result success">
             <small>
-              <Check size={13} /> PRODUCT FOUND
+              WANT IS SEARCHING LIVE
             </small>
 
             <strong>{lastSearch}</strong>
 
-            <p>{message}</p>
+            <p>
+              Searching stores, comparing
+              prices and checking your budget...
+            </p>
           </div>
         )}
+
+        {status === "added" &&
+          bestResult && (
+            <div className="search-result success">
+              <small>
+                <Check size={13} />
+                BEST MATCH FOUND
+              </small>
+
+              <strong>
+                {bestResult.title}
+              </strong>
+
+              <p>
+                {formatPrice(
+                  bestResult.extracted_price
+                )}
+                {bestResult.source
+                  ? ` · ${bestResult.source}`
+                  : ""}
+              </p>
+
+              {budget !== undefined && (
+                <p>
+                  Budget:{" "}
+                  {formatPrice(budget)} ·{" "}
+                  {bestResult.extracted_price !==
+                    undefined &&
+                  bestResult.extracted_price <=
+                    budget
+                    ? "✓ Within budget"
+                    : "Above budget"}
+                </p>
+              )}
+            </div>
+          )}
 
         {status === "error" && (
           <div className="search-result">
             <small>SEARCH ERROR</small>
 
-            <strong>{lastSearch}</strong>
+            <strong>
+              Could not find a deal
+            </strong>
 
-            <p>{message}</p>
+            <p>{errorMessage}</p>
           </div>
         )}
       </section>
+
+      {searchResults.length > 0 && (
+        <>
+          <div className="title">
+            <b>● LIVE DEALS</b>
+            <span>
+              {searchResults.length} found
+            </span>
+          </div>
+
+          <section className="cards">
+            {searchResults.map(
+              (product, i) => {
+                const price =
+                  product.extracted_price;
+
+                const isUnderBudget =
+                  budget !== undefined &&
+                  price !== undefined &&
+                  price <= budget;
+
+                const link =
+                  getProductLink(product);
+
+                return (
+                  <article
+                    key={`result-${
+                      product.title || i
+                    }-${i}`}
+                  >
+                    <i>#{i + 1}</i>
+
+                    {product.thumbnail ? (
+                      <strong
+                        style={{
+                          overflow: "hidden",
+                        }}
+                      >
+                        <img
+                          src={
+                            product.thumbnail
+                          }
+                          alt=""
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit:
+                              "contain",
+                          }}
+                        />
+                      </strong>
+                    ) : (
+                      <strong>✨</strong>
+                    )}
+
+                    <div>
+                      <b>
+                        {product.title ||
+                          "Product"}
+                      </b>
+
+                      <small>
+                        {product.source ||
+                          "Online store"}
+
+                        {product.rating
+                          ? ` · ★ ${product.rating}`
+                          : ""}
+                      </small>
+                    </div>
+
+                    <aside>
+                      <b>
+                        {formatPrice(price)}
+                      </b>
+
+                      {budget !==
+                        undefined && (
+                        <small>
+                          {isUnderBudget
+                            ? "✓ IN BUDGET"
+                            : "OVER BUDGET"}
+                        </small>
+                      )}
+
+                      {link && (
+                        <a
+                          href={link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            fontSize: 10,
+                            marginTop: 5,
+                            color:
+                              "var(--purple, #a66cff)",
+                            textDecoration:
+                              "none",
+                          }}
+                        >
+                          VIEW DEAL{" "}
+                          <ExternalLink
+                            size={9}
+                            style={{
+                              display:
+                                "inline",
+                            }}
+                          />
+                        </a>
+                      )}
+                    </aside>
+                  </article>
+                );
+              }
+            )}
+          </section>
+        </>
+      )}
 
       <section className="stats">
         <div>
@@ -316,7 +623,14 @@ export default function Page() {
         </div>
 
         <div>
-          <b>0</b>
+          <b>
+            {
+              wishes.filter(
+                (wish) =>
+                  wish.underBudget === true
+              ).length
+            }
+          </b>
           <span>Targets hit</span>
         </div>
 
@@ -335,22 +649,28 @@ export default function Page() {
         {wishes.map((wish, i) => (
           <article
             key={`${wish.name}-${i}`}
-            onClick={() => {
-              if (wish.link) {
-                window.open(
-                  wish.link,
-                  "_blank",
-                  "noopener,noreferrer"
-                );
-              }
-            }}
-            style={{
-              cursor: wish.link ? "pointer" : "default",
-            }}
           >
             <i>#{i + 1}</i>
 
-            <strong>{wish.icon}</strong>
+            {wish.image ? (
+              <strong
+                style={{
+                  overflow: "hidden",
+                }}
+              >
+                <img
+                  src={wish.image}
+                  alt=""
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+              </strong>
+            ) : (
+              <strong>{wish.icon}</strong>
+            )}
 
             <div>
               <b>{wish.name}</b>
@@ -365,7 +685,9 @@ export default function Page() {
                 <small>
                   Target €{wish.target} ·{" "}
                   <u>
-                    <TrendingDown size={12} />
+                    <TrendingDown
+                      size={12}
+                    />
                     {wish.discount}%
                   </u>
                 </small>
@@ -373,28 +695,45 @@ export default function Page() {
             </div>
 
             <aside>
+              <b>
+                {wish.price !== undefined
+                  ? formatPrice(wish.price)
+                  : "—"}
+              </b>
+
               {wish.custom ? (
                 <>
-                  <b>
-                    {wish.price !== undefined
-                      ? `€${wish.price.toFixed(2)}`
-                      : "—"}
-                  </b>
-
                   <small>
-                    {wish.link
-                      ? "VIEW DEAL"
+                    {wish.underBudget === true
+                      ? "TARGET HIT"
+                      : wish.target
+                      ? `TARGET ${formatPrice(
+                          wish.target
+                        )}`
                       : "LIVE RESULT"}
                   </small>
+
+                  {wish.link && (
+                    <a
+                      href={wish.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontSize: 10,
+                        marginTop: 5,
+                        color:
+                          "var(--purple, #a66cff)",
+                        textDecoration: "none",
+                      }}
+                    >
+                      VIEW DEAL
+                    </a>
+                  )}
                 </>
               ) : (
-                <>
-                  <b>€{wish.price}</b>
-
-                  <small>
-                    WANT SCORE {wish.score}
-                  </small>
-                </>
+                <small>
+                  WANT SCORE {wish.score}
+                </small>
               )}
             </aside>
           </article>
@@ -408,20 +747,66 @@ export default function Page() {
             AI INSIGHT
           </label>
 
-          <h2>
-            Oakley is close to your target.
-          </h2>
+          {bestResult ? (
+            <>
+              <h2>
+                {budget !== undefined &&
+                bestResult.extracted_price !==
+                  undefined &&
+                bestResult.extracted_price <=
+                  budget
+                  ? "We found an option within your budget."
+                  : "WANT compared live shopping results."}
+              </h2>
 
-          <p>
-            Current price is only €4 above target and near its
-            90-day low.
-          </p>
+              <p>
+                Best current result:{" "}
+                {bestResult.title} for{" "}
+                {formatPrice(
+                  bestResult.extracted_price
+                )}
+                {bestResult.source
+                  ? ` at ${bestResult.source}.`
+                  : "."}
+              </p>
+            </>
+          ) : (
+            <>
+              <h2>
+                Oakley is close to your
+                target.
+              </h2>
+
+              <p>
+                Current price is only €4
+                above target and near its
+                90-day low.
+              </p>
+            </>
+          )}
         </div>
 
-        <button>
-          Check deals
-          <ArrowRight size={15} />
-        </button>
+        {bestResult &&
+        getProductLink(bestResult) ? (
+          <button
+            onClick={() => {
+              window.open(
+                getProductLink(
+                  bestResult
+                ),
+                "_blank"
+              );
+            }}
+          >
+            Best deal
+            <ArrowRight size={15} />
+          </button>
+        ) : (
+          <button>
+            Check deals
+            <ArrowRight size={15} />
+          </button>
+        )}
       </section>
 
       <div className="title">
@@ -433,10 +818,13 @@ export default function Page() {
         <b>👤 👤 👤</b>
 
         <div>
-          <b>1,284 people want this</b>
+          <b>
+            1,284 people want this
+          </b>
 
           <small>
-            Trending products & shared deals
+            Trending products & shared
+            deals
           </small>
         </div>
 
@@ -452,7 +840,9 @@ export default function Page() {
           ["Profile", User],
         ].map(([name, Icon]: any) => (
           <button
-            className={tab === name ? "active" : ""}
+            className={
+              tab === name ? "active" : ""
+            }
             onClick={() => setTab(name)}
             key={name}
           >
