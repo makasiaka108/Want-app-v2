@@ -11,32 +11,30 @@ import {
   Bell,
   ArrowRight,
   LoaderCircle,
-  Check,
   ExternalLink,
+  Star,
+  Check,
 } from "lucide-react";
 
 type Product = {
   title: string;
-  price: number | null;
-  displayPrice?: string | null;
+  price: number;
   source: string;
-  thumbnail: string | null;
-  link: string | null;
-  matchScore: number;
-  accessory: boolean;
-  exactModelMatch: boolean;
-  withinBudget: boolean | null;
+  link: string;
+  thumbnail: string;
+  rating?: number | null;
+  reviews?: number | null;
+  delivery?: string;
+  matchScore?: number;
+  wantScore?: number;
 };
 
 type SearchResponse = {
   query: string;
-  searchQuery: string;
-  budget: number | null;
-  totalResults: number;
-  filteredResults: number;
-  exactMatchWithinBudget: boolean;
-  bestMatch: Product | null;
+  bestDeal: Product | null;
   products: Product[];
+  totalFound: number;
+  medianPrice?: number | null;
   error?: string;
 };
 
@@ -45,21 +43,45 @@ export default function Page() {
   const [query, setQuery] = useState("");
 
   const [status, setStatus] = useState<
-    "idle" | "searching" | "success" | "empty" | "error"
+    "idle" | "searching" | "success" | "error"
   >("idle");
 
-  const [lastSearch, setLastSearch] = useState("");
-  const [result, setResult] =
-    useState<SearchResponse | null>(null);
+  const [searchedQuery, setSearchedQuery] = useState("");
+  const [products, setProducts] = useState<Product[]>([]);
+  const [bestDeal, setBestDeal] = useState<Product | null>(null);
+  const [totalFound, setTotalFound] = useState(0);
+  const [medianPrice, setMedianPrice] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  function formatPrice(price?: number | null) {
+    if (typeof price !== "number") return "—";
+
+    return new Intl.NumberFormat("en-IE", {
+      style: "currency",
+      currency: "EUR",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(price);
+  }
+
+  function openDeal(link?: string) {
+    if (!link) return;
+
+    window.open(link, "_blank", "noopener,noreferrer");
+  }
 
   async function handleSearch() {
     const cleanQuery = query.trim();
 
     if (!cleanQuery || status === "searching") return;
 
-    setLastSearch(cleanQuery);
     setStatus("searching");
-    setResult(null);
+    setSearchedQuery(cleanQuery);
+    setError("");
+    setProducts([]);
+    setBestDeal(null);
+    setTotalFound(0);
+    setMedianPrice(null);
 
     try {
       const response = await fetch("/api/search", {
@@ -78,35 +100,27 @@ export default function Page() {
         throw new Error(data.error || "Search failed");
       }
 
-      setResult(data);
+      setProducts(Array.isArray(data.products) ? data.products : []);
+      setBestDeal(data.bestDeal || null);
+      setTotalFound(data.totalFound || 0);
+      setMedianPrice(
+        typeof data.medianPrice === "number"
+          ? data.medianPrice
+          : null
+      );
 
-      if (!data.products?.length) {
-        setStatus("empty");
-      } else {
-        setStatus("success");
-      }
-    } catch (error) {
-      console.error(error);
+      setStatus("success");
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong"
+      );
+
       setStatus("error");
     }
-  }
-
-  function formatPrice(product: Product) {
-    if (typeof product.price === "number") {
-      return `€${product.price.toFixed(2)}`;
-    }
-
-    return product.displayPrice || "See price";
-  }
-
-  function openProduct(product: Product) {
-    if (!product.link) return;
-
-    window.open(
-      product.link,
-      "_blank",
-      "noopener,noreferrer"
-    );
   }
 
   return (
@@ -142,9 +156,8 @@ export default function Page() {
         </h1>
 
         <p>
-          Tell WANT. what you're looking for. AI searches live
-          shopping results, compares prices and finds the best
-          option for your budget.
+          Search for any product. WANT compares live shopping
+          offers and finds the best deals for you.
         </p>
 
         <div className="ask">
@@ -156,15 +169,13 @@ export default function Page() {
                 handleSearch();
               }
             }}
-            placeholder='Try “AirPods Pro 3 under €200”'
+            placeholder='Search a product — e.g. "AirPods Pro 3"'
           />
 
           <button
             onClick={handleSearch}
-            disabled={
-              !query.trim() || status === "searching"
-            }
-            aria-label="Submit"
+            disabled={!query.trim() || status === "searching"}
+            aria-label="Search products"
           >
             {status === "searching" ? (
               <LoaderCircle className="spin" />
@@ -176,13 +187,16 @@ export default function Page() {
 
         {status === "searching" && (
           <div className="search-result">
-            <small>WANT IS SEARCHING</small>
+            <small>
+              <LoaderCircle size={13} className="spin" />
+              WANT IS SEARCHING
+            </small>
 
-            <strong>{lastSearch}</strong>
+            <strong>{searchedQuery}</strong>
 
             <p>
-              Checking live products, filtering accessories and
-              comparing prices...
+              Comparing live offers and filtering irrelevant
+              products...
             </p>
           </div>
         )}
@@ -191,110 +205,115 @@ export default function Page() {
           <div className="search-result">
             <small>SEARCH ERROR</small>
 
-            <strong>Something went wrong.</strong>
+            <strong>{searchedQuery}</strong>
 
-            <p>
-              Please try the search again.
-            </p>
-          </div>
-        )}
-
-        {status === "empty" && (
-          <div className="search-result">
-            <small>NO GOOD MATCH</small>
-
-            <strong>{lastSearch}</strong>
-
-            <p>
-              WANT couldn't find a reliable product match. Try
-              adding the brand or exact model.
-            </p>
+            <p>{error}</p>
           </div>
         )}
       </section>
 
-      {status === "success" && result && (
+      {status === "success" && (
         <>
-          {result.bestMatch && (
+          <section className="stats">
+            <div>
+              <b>{totalFound}</b>
+              <span>Offers found</span>
+            </div>
+
+            <div>
+              <b>
+                {bestDeal
+                  ? formatPrice(bestDeal.price)
+                  : "—"}
+              </b>
+              <span>Best price</span>
+            </div>
+
+            <div>
+              <b>
+                {medianPrice
+                  ? formatPrice(medianPrice)
+                  : "—"}
+              </b>
+              <span>Market price</span>
+            </div>
+          </section>
+
+          {bestDeal ? (
             <section className="insight">
               <div>
                 <label>
                   <Sparkles size={13} />
-                  BEST MATCH
+                  BEST DEAL
                 </label>
 
-                <h2>{result.bestMatch.title}</h2>
+                <h2>{bestDeal.title}</h2>
 
                 <p>
-                  Found at {result.bestMatch.source}
-                  {result.budget !== null &&
-                    result.bestMatch.withinBudget &&
-                    ` · Within your €${result.budget} budget`}
+                  Found at {bestDeal.source}
+                  {bestDeal.wantScore
+                    ? ` · WANT Score ${bestDeal.wantScore}`
+                    : ""}
                 </p>
               </div>
 
               <button
-                onClick={() =>
-                  openProduct(result.bestMatch!)
-                }
-                disabled={!result.bestMatch.link}
+                onClick={() => openDeal(bestDeal.link)}
+                disabled={!bestDeal.link}
               >
-                {formatPrice(result.bestMatch)}
+                {formatPrice(bestDeal.price)}
                 <ExternalLink size={15} />
               </button>
             </section>
-          )}
+          ) : (
+            <section className="insight">
+              <div>
+                <label>
+                  <Sparkles size={13} />
+                  NO RELIABLE DEAL
+                </label>
 
-          {result.budget !== null &&
-            !result.exactMatchWithinBudget && (
-              <section className="search-result">
-                <small>PRICE ALERT</small>
-
-                <strong>
-                  No exact match found under €
-                  {result.budget}
-                </strong>
+                <h2>
+                  We couldn't find a confident match.
+                </h2>
 
                 <p>
-                  These are the closest relevant live offers WANT
-                  found.
+                  Try adding the brand or exact model name.
                 </p>
-              </section>
-            )}
+              </div>
+            </section>
+          )}
 
           <div className="title">
             <b>● LIVE DEALS</b>
-            <span>{result.products.length} found</span>
+            <span>{products.length} shown</span>
           </div>
 
           <section className="cards">
-            {result.products.map((product, i) => (
+            {products.map((product, i) => (
               <article
-                key={`${product.title}-${i}`}
-                onClick={() => openProduct(product)}
-                style={{
-                  cursor: product.link
-                    ? "pointer"
-                    : "default",
-                }}
+                key={`${product.title}-${product.source}-${i}`}
               >
                 <i>#{i + 1}</i>
 
-                {product.thumbnail ? (
-                  <img
-                    src={product.thumbnail}
-                    alt={product.title}
-                    style={{
-                      width: 76,
-                      height: 76,
-                      objectFit: "contain",
-                      borderRadius: 12,
-                      background: "#fff",
-                    }}
-                  />
-                ) : (
-                  <strong>✨</strong>
-                )}
+                <strong>
+                  {product.thumbnail ? (
+                    <img
+                      src={product.thumbnail}
+                      alt={product.title}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                        borderRadius: "12px",
+                        background: "white",
+                      }}
+                    />
+                  ) : (
+                    "✨"
+                  )}
+                </strong>
 
                 <div>
                   <b>{product.title}</b>
@@ -302,30 +321,70 @@ export default function Page() {
                   <small>
                     {product.source}
 
-                    {product.withinBudget && (
+                    {product.rating ? (
                       <>
                         {" "}
-                        · <u>IN BUDGET</u>
+                        · <Star size={11} />
+                        {product.rating}
                       </>
-                    )}
+                    ) : null}
                   </small>
+
+                  {product.delivery && (
+                    <small>{product.delivery}</small>
+                  )}
                 </div>
 
                 <aside>
-                  <b>{formatPrice(product)}</b>
+                  <b>{formatPrice(product.price)}</b>
 
                   <small>
-                    {product.exactModelMatch
-                      ? "BEST MATCH"
-                      : `MATCH ${Math.max(
-                          0,
-                          product.matchScore
-                        )}`}
+                    {i === 0
+                      ? "BEST DEAL"
+                      : product.wantScore
+                      ? `WANT SCORE ${product.wantScore}`
+                      : "VIEW DEAL"}
                   </small>
+
+                  {product.link && (
+                    <button
+                      onClick={() =>
+                        openDeal(product.link)
+                      }
+                      aria-label={`Open ${product.title}`}
+                      style={{
+                        background: "transparent",
+                        border: 0,
+                        padding: 0,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                  )}
                 </aside>
               </article>
             ))}
           </section>
+
+          {products.length > 0 && (
+            <section className="community">
+              <b>
+                <Check />
+              </b>
+
+              <div>
+                <b>
+                  WANT checked {totalFound} relevant offers
+                </b>
+
+                <small>
+                  Irrelevant accessories, used products and
+                  suspicious price outliers were filtered.
+                </small>
+              </div>
+            </section>
+          )}
         </>
       )}
 
@@ -333,55 +392,38 @@ export default function Page() {
         <>
           <section className="stats">
             <div>
-              <b>0</b>
-              <span>Wishes tracked</span>
+              <b>LIVE</b>
+              <span>Product search</span>
             </div>
 
             <div>
-              <b>0</b>
-              <span>Targets hit</span>
+              <b>PT</b>
+              <span>Portugal market</span>
             </div>
 
             <div>
-              <b>—</b>
-              <span>Potential savings</span>
+              <b>AI</b>
+              <span>Deal ranking</span>
             </div>
           </section>
 
-          <div className="title">
-            <b>● AI TOP PICKS</b>
-            <span>Start searching</span>
-          </div>
+          <section className="insight">
+            <div>
+              <label>
+                <Sparkles size={13} />
+                HOW IT WORKS
+              </label>
+
+              <h2>Just tell WANT. what you want.</h2>
+
+              <p>
+                Search by product name. WANT finds offers,
+                removes irrelevant results and ranks the best
+                deals.
+              </p>
+            </div>
+          </section>
         </>
-      )}
-
-      {status === "success" && result?.bestMatch && (
-        <section className="community">
-          <b>
-            <Check size={22} />
-          </b>
-
-          <div>
-            <b>
-              {result.exactMatchWithinBudget
-                ? "Target found"
-                : "Closest match found"}
-            </b>
-
-            <small>
-              WANT analyzed {result.totalResults} shopping
-              results
-            </small>
-          </div>
-
-          <button
-            onClick={() =>
-              openProduct(result.bestMatch!)
-            }
-          >
-            <ArrowRight size={18} />
-          </button>
-        </section>
       )}
 
       <nav>
@@ -393,9 +435,7 @@ export default function Page() {
           ["Profile", User],
         ].map(([name, Icon]: any) => (
           <button
-            className={
-              tab === name ? "active" : ""
-            }
+            className={tab === name ? "active" : ""}
             onClick={() => setTab(name)}
             key={name}
           >
