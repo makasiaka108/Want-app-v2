@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Home,
   Heart,
@@ -14,74 +14,203 @@ import {
   ExternalLink,
   Star,
   Check,
+  TrendingDown,
 } from "lucide-react";
 
 type Product = {
-  title: string;
-  price: number;
-  source: string;
-  link: string;
-  thumbnail: string;
-  rating?: number | null;
-  reviews?: number | null;
+  title?: string;
+  price?: string | number;
+  extracted_price?: number;
+  source?: string;
+  link?: string;
+  product_link?: string;
+  thumbnail?: string;
+  rating?: number;
+  reviews?: number;
   delivery?: string;
-  matchScore?: number;
-  wantScore?: number;
+  tag?: string;
+  second_hand_condition?: string;
+};
+
+type RankedProduct = Product & {
+  wantScore: number;
+  reasons: string[];
+  numericPrice: number | null;
 };
 
 type SearchResponse = {
-  query: string;
-  bestDeal: Product | null;
-  products: Product[];
-  totalFound: number;
-  medianPrice?: number | null;
+  query?: string;
+  products?: Product[];
   error?: string;
 };
 
-export default function Page() {
-  const [tab, setTab] = useState("Home");
-  const [query, setQuery] = useState("");
+function getNumericPrice(product: Product): number | null {
+  if (
+    typeof product.extracted_price === "number" &&
+    Number.isFinite(product.extracted_price)
+  ) {
+    return product.extracted_price;
+  }
 
-  const [status, setStatus] = useState<
-    "idle" | "searching" | "success" | "error"
-  >("idle");
+  if (typeof product.price === "number" && Number.isFinite(product.price)) {
+    return product.price;
+  }
 
-  const [searchedQuery, setSearchedQuery] = useState("");
-  const [products, setProducts] = useState<Product[]>([]);
-  const [bestDeal, setBestDeal] = useState<Product | null>(null);
-  const [totalFound, setTotalFound] = useState(0);
-  const [medianPrice, setMedianPrice] = useState<number | null>(null);
-  const [error, setError] = useState("");
+  if (typeof product.price === "string") {
+    const cleaned = product.price
+      .replace(/\s/g, "")
+      .replace(/[^\d,.-]/g, "")
+      .replace(",", ".");
 
-  function formatPrice(price?: number | null) {
-    if (typeof price !== "number") return "—";
+    const value = Number.parseFloat(cleaned);
 
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function formatPrice(product: RankedProduct) {
+  if (product.numericPrice !== null) {
     return new Intl.NumberFormat("en-IE", {
       style: "currency",
       currency: "EUR",
-      minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(price);
+    }).format(product.numericPrice);
   }
 
-  function openDeal(link?: string) {
-    if (!link) return;
+  return product.price || "Price unavailable";
+}
 
-    window.open(link, "_blank", "noopener,noreferrer");
-  }
+function productUrl(product: Product) {
+  return product.product_link || product.link || "";
+}
+
+function rankProducts(products: Product[]): RankedProduct[] {
+  const validPrices = products
+    .map(getNumericPrice)
+    .filter((price): price is number => price !== null && price > 0);
+
+  const sortedPrices = [...validPrices].sort((a, b) => a - b);
+
+  const medianPrice =
+    sortedPrices.length === 0
+      ? null
+      : sortedPrices[Math.floor(sortedPrices.length / 2)];
+
+  return products
+    .map((product) => {
+      const price = getNumericPrice(product);
+
+      let score = 50;
+      const reasons: string[] = [];
+
+      if (price !== null && medianPrice !== null) {
+        const ratio = price / medianPrice;
+
+        if (ratio <= 0.8) {
+          score += 25;
+          reasons.push("Excellent price");
+        } else if (ratio <= 0.95) {
+          score += 18;
+          reasons.push("Below typical price");
+        } else if (ratio <= 1.08) {
+          score += 10;
+          reasons.push("Fair market price");
+        } else if (ratio >= 1.35) {
+          score -= 12;
+          reasons.push("Higher than similar offers");
+        }
+      }
+
+      if (product.rating) {
+        if (product.rating >= 4.7) {
+          score += 15;
+          reasons.push("Excellent rating");
+        } else if (product.rating >= 4.4) {
+          score += 11;
+          reasons.push("Highly rated");
+        } else if (product.rating >= 4) {
+          score += 6;
+          reasons.push("Good rating");
+        }
+      }
+
+      if (product.reviews) {
+        if (product.reviews >= 1000) {
+          score += 10;
+          reasons.push("Many verified reviews");
+        } else if (product.reviews >= 100) {
+          score += 6;
+          reasons.push("Strong review history");
+        }
+      }
+
+      if (product.source) {
+        score += 3;
+        reasons.push(`Available at ${product.source}`);
+      }
+
+      if (product.delivery) {
+        score += 3;
+        reasons.push("Delivery information available");
+      }
+
+      if (product.second_hand_condition) {
+        score -= 8;
+        reasons.push("Check item condition");
+      }
+
+      score = Math.max(1, Math.min(99, score));
+
+      return {
+        ...product,
+        numericPrice: price,
+        wantScore: score,
+        reasons: reasons.slice(0, 3),
+      };
+    })
+    .sort((a, b) => {
+      if (b.wantScore !== a.wantScore) {
+        return b.wantScore - a.wantScore;
+      }
+
+      if (a.numericPrice === null) return 1;
+      if (b.numericPrice === null) return -1;
+
+      return a.numericPrice - b.numericPrice;
+    });
+}
+
+export default function Page() {
+  const [tab, setTab] = useState("AI");
+  const [query, setQuery] = useState("");
+  const [lastSearch, setLastSearch] = useState("");
+
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const [tracked, setTracked] = useState<string[]>([]);
+
+  const rankedProducts = useMemo(
+    () => rankProducts(products),
+    [products]
+  );
+
+  const bestDeal = rankedProducts[0];
 
   async function handleSearch() {
     const cleanQuery = query.trim();
 
-    if (!cleanQuery || status === "searching") return;
+    if (!cleanQuery || loading) return;
 
-    setStatus("searching");
-    setSearchedQuery(cleanQuery);
+    setLoading(true);
     setError("");
     setProducts([]);
-    setBestDeal(null);
-    setTotalFound(0);
-    setMedianPrice(null);
+    setLastSearch(cleanQuery);
 
     try {
       const response = await fetch("/api/search", {
@@ -100,16 +229,9 @@ export default function Page() {
         throw new Error(data.error || "Search failed");
       }
 
-      setProducts(Array.isArray(data.products) ? data.products : []);
-      setBestDeal(data.bestDeal || null);
-      setTotalFound(data.totalFound || 0);
-      setMedianPrice(
-        typeof data.medianPrice === "number"
-          ? data.medianPrice
-          : null
+      setProducts(
+        Array.isArray(data.products) ? data.products : []
       );
-
-      setStatus("success");
     } catch (err) {
       console.error(err);
 
@@ -118,9 +240,37 @@ export default function Page() {
           ? err.message
           : "Something went wrong"
       );
-
-      setStatus("error");
+    } finally {
+      setLoading(false);
     }
+  }
+
+  function toggleTrack(product: RankedProduct) {
+    const key =
+      productUrl(product) ||
+      `${product.title}-${product.source}-${product.numericPrice}`;
+
+    setTracked((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key]
+    );
+  }
+
+  function isTracked(product: RankedProduct) {
+    const key =
+      productUrl(product) ||
+      `${product.title}-${product.source}-${product.numericPrice}`;
+
+    return tracked.includes(key);
+  }
+
+  function openDeal(product: RankedProduct) {
+    const url = productUrl(product);
+
+    if (!url) return;
+
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   return (
@@ -156,274 +306,303 @@ export default function Page() {
         </h1>
 
         <p>
-          Search for any product. WANT compares live shopping
-          offers and finds the best deals for you.
+          Enter a product name. WANT searches live shopping
+          offers, compares them and ranks the best deals.
         </p>
 
         <div className="ask">
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
                 handleSearch();
               }
             }}
-            placeholder='Search a product — e.g. "AirPods Pro 3"'
+            placeholder='Try “AirPods Pro 3”'
           />
 
           <button
             onClick={handleSearch}
-            disabled={!query.trim() || status === "searching"}
+            disabled={!query.trim() || loading}
             aria-label="Search products"
           >
-            {status === "searching" ? (
+            {loading ? (
               <LoaderCircle className="spin" />
             ) : (
               <ArrowRight />
             )}
           </button>
         </div>
-
-        {status === "searching" && (
-          <div className="search-result">
-            <small>
-              <LoaderCircle size={13} className="spin" />
-              WANT IS SEARCHING
-            </small>
-
-            <strong>{searchedQuery}</strong>
-
-            <p>
-              Comparing live offers and filtering irrelevant
-              products...
-            </p>
-          </div>
-        )}
-
-        {status === "error" && (
-          <div className="search-result">
-            <small>SEARCH ERROR</small>
-
-            <strong>{searchedQuery}</strong>
-
-            <p>{error}</p>
-          </div>
-        )}
       </section>
 
-      {status === "success" && (
-        <>
-          <section className="stats">
-            <div>
-              <b>{totalFound}</b>
-              <span>Offers found</span>
-            </div>
+      {loading && (
+        <section className="search-result">
+          <small>
+            <Sparkles size={13} />
+            WANT IS SEARCHING
+          </small>
 
-            <div>
-              <b>
-                {bestDeal
-                  ? formatPrice(bestDeal.price)
-                  : "—"}
-              </b>
-              <span>Best price</span>
-            </div>
+          <strong>{lastSearch}</strong>
 
-            <div>
-              <b>
-                {medianPrice
-                  ? formatPrice(medianPrice)
-                  : "—"}
-              </b>
-              <span>Market price</span>
-            </div>
+          <p>
+            Finding live offers and comparing prices,
+            ratings and stores...
+          </p>
+        </section>
+      )}
+
+      {error && (
+        <section className="search-result">
+          <small>SEARCH ERROR</small>
+
+          <strong>{error}</strong>
+
+          <p>Please try the search again.</p>
+        </section>
+      )}
+
+      {!loading &&
+        !error &&
+        lastSearch &&
+        rankedProducts.length === 0 && (
+          <section className="search-result">
+            <small>NO DEALS FOUND</small>
+
+            <strong>{lastSearch}</strong>
+
+            <p>
+              Try using only the exact product name without
+              a price or extra description.
+            </p>
           </section>
+        )}
 
-          {bestDeal ? (
-            <section className="insight">
-              <div>
-                <label>
-                  <Sparkles size={13} />
-                  BEST DEAL
-                </label>
-
-                <h2>{bestDeal.title}</h2>
-
-                <p>
-                  Found at {bestDeal.source}
-                  {bestDeal.wantScore
-                    ? ` · WANT Score ${bestDeal.wantScore}`
-                    : ""}
-                </p>
-              </div>
-
-              <button
-                onClick={() => openDeal(bestDeal.link)}
-                disabled={!bestDeal.link}
-              >
-                {formatPrice(bestDeal.price)}
-                <ExternalLink size={15} />
-              </button>
-            </section>
-          ) : (
-            <section className="insight">
-              <div>
-                <label>
-                  <Sparkles size={13} />
-                  NO RELIABLE DEAL
-                </label>
-
-                <h2>
-                  We couldn't find a confident match.
-                </h2>
-
-                <p>
-                  Try adding the brand or exact model name.
-                </p>
-              </div>
-            </section>
-          )}
-
-          <div className="title">
-            <b>● LIVE DEALS</b>
-            <span>{products.length} shown</span>
+      {bestDeal && (
+        <section className="best-deal">
+          <div className="best-label">
+            <Sparkles size={13} />
+            BEST DEAL
           </div>
 
-          <section className="cards">
-            {products.map((product, i) => (
+          <div className="best-content">
+            {bestDeal.thumbnail ? (
+              <img
+                src={bestDeal.thumbnail}
+                alt={bestDeal.title || "Product"}
+              />
+            ) : (
+              <div className="product-placeholder">
+                <Sparkles />
+              </div>
+            )}
+
+            <div className="best-info">
+              <h2>{bestDeal.title}</h2>
+
+              <p>
+                {bestDeal.source
+                  ? `Found at ${bestDeal.source}`
+                  : "Live shopping offer"}
+              </p>
+
+              <div className="reason-list">
+                {bestDeal.reasons.map((reason) => (
+                  <span key={reason}>
+                    <Check size={12} />
+                    {reason}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <aside>
+              <strong>{formatPrice(bestDeal)}</strong>
+
+              <span>
+                WANT SCORE {bestDeal.wantScore}
+              </span>
+            </aside>
+          </div>
+
+          <div className="best-actions">
+            <button
+              className="track-button"
+              onClick={() => toggleTrack(bestDeal)}
+            >
+              <Heart
+                size={16}
+                fill={
+                  isTracked(bestDeal)
+                    ? "currentColor"
+                    : "none"
+                }
+              />
+
+              {isTracked(bestDeal)
+                ? "Tracking price"
+                : "Track price"}
+            </button>
+
+            <button
+              className="deal-button"
+              disabled={!productUrl(bestDeal)}
+              onClick={() => openDeal(bestDeal)}
+            >
+              View deal
+              <ExternalLink size={15} />
+            </button>
+          </div>
+        </section>
+      )}
+
+      {rankedProducts.length > 0 && (
+        <>
+          <div className="title">
+            <b>● LIVE DEALS</b>
+
+            <span>{rankedProducts.length} found</span>
+          </div>
+
+          <section className="cards live-cards">
+            {rankedProducts.map((product, index) => (
               <article
-                key={`${product.title}-${product.source}-${i}`}
+                key={`${product.title}-${index}`}
+                className={
+                  index === 0 ? "top-product" : ""
+                }
               >
-                <i>#{i + 1}</i>
+                <i>#{index + 1}</i>
 
-                <strong>
-                  {product.thumbnail ? (
-                    <img
-                      src={product.thumbnail}
-                      alt={product.title}
-                      loading="lazy"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        borderRadius: "12px",
-                        background: "white",
-                      }}
-                    />
-                  ) : (
-                    "✨"
-                  )}
-                </strong>
+                {product.thumbnail ? (
+                  <img
+                    src={product.thumbnail}
+                    alt={product.title || "Product"}
+                  />
+                ) : (
+                  <div className="card-placeholder">
+                    <Sparkles />
+                  </div>
+                )}
 
-                <div>
-                  <b>{product.title}</b>
+                <div className="product-copy">
+                  <b>{product.title || "Product"}</b>
 
                   <small>
-                    {product.source}
-
-                    {product.rating ? (
-                      <>
-                        {" "}
-                        · <Star size={11} />
-                        {product.rating}
-                      </>
-                    ) : null}
+                    {product.source || "Online store"}
                   </small>
 
-                  {product.delivery && (
-                    <small>{product.delivery}</small>
-                  )}
+                  <div className="product-meta">
+                    {product.rating ? (
+                      <span>
+                        <Star
+                          size={11}
+                          fill="currentColor"
+                        />
+                        {product.rating}
+                        {product.reviews
+                          ? ` (${product.reviews})`
+                          : ""}
+                      </span>
+                    ) : null}
+
+                    {product.numericPrice !== null &&
+                    bestDeal.numericPrice !== null &&
+                    product.numericPrice <=
+                      bestDeal.numericPrice * 1.1 ? (
+                      <span className="good-price">
+                        <TrendingDown size={11} />
+                        Competitive price
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 <aside>
-                  <b>{formatPrice(product.price)}</b>
+                  <b>{formatPrice(product)}</b>
 
                   <small>
-                    {i === 0
-                      ? "BEST DEAL"
-                      : product.wantScore
-                      ? `WANT SCORE ${product.wantScore}`
-                      : "VIEW DEAL"}
+                    WANT SCORE {product.wantScore}
                   </small>
 
-                  {product.link && (
+                  <div className="mini-actions">
                     <button
+                      aria-label="Track price"
                       onClick={() =>
-                        openDeal(product.link)
+                        toggleTrack(product)
                       }
-                      aria-label={`Open ${product.title}`}
-                      style={{
-                        background: "transparent",
-                        border: 0,
-                        padding: 0,
-                        cursor: "pointer",
-                      }}
+                    >
+                      <Heart
+                        size={14}
+                        fill={
+                          isTracked(product)
+                            ? "currentColor"
+                            : "none"
+                        }
+                      />
+                    </button>
+
+                    <button
+                      aria-label="View deal"
+                      disabled={!productUrl(product)}
+                      onClick={() => openDeal(product)}
                     >
                       <ExternalLink size={14} />
                     </button>
-                  )}
+                  </div>
                 </aside>
               </article>
             ))}
           </section>
-
-          {products.length > 0 && (
-            <section className="community">
-              <b>
-                <Check />
-              </b>
-
-              <div>
-                <b>
-                  WANT checked {totalFound} relevant offers
-                </b>
-
-                <small>
-                  Irrelevant accessories, used products and
-                  suspicious price outliers were filtered.
-                </small>
-              </div>
-            </section>
-          )}
         </>
       )}
 
-      {status === "idle" && (
-        <>
-          <section className="stats">
-            <div>
-              <b>LIVE</b>
-              <span>Product search</span>
-            </div>
+      {bestDeal && (
+        <section className="insight">
+          <div>
+            <label>
+              <Sparkles size={13} />
+              AI INSIGHT
+            </label>
 
-            <div>
-              <b>PT</b>
-              <span>Portugal market</span>
-            </div>
+            <h2>
+              WANT recommends{" "}
+              {bestDeal.title || "this deal"}.
+            </h2>
 
-            <div>
-              <b>AI</b>
-              <span>Deal ranking</span>
-            </div>
-          </section>
+            <p>
+              This offer currently has the strongest
+              combination of price, rating, reviews and
+              seller information among the results found.
+            </p>
+          </div>
 
-          <section className="insight">
-            <div>
-              <label>
-                <Sparkles size={13} />
-                HOW IT WORKS
-              </label>
+          <div className="score-circle">
+            <strong>{bestDeal.wantScore}</strong>
+            <small>WANT SCORE</small>
+          </div>
+        </section>
+      )}
 
-              <h2>Just tell WANT. what you want.</h2>
+      {tracked.length > 0 && (
+        <section className="tracking-summary">
+          <Heart size={16} fill="currentColor" />
 
-              <p>
-                Search by product name. WANT finds offers,
-                removes irrelevant results and ranks the best
-                deals.
-              </p>
-            </div>
-          </section>
-        </>
+          <div>
+            <b>
+              {tracked.length}{" "}
+              {tracked.length === 1
+                ? "product"
+                : "products"}{" "}
+              tracked
+            </b>
+
+            <small>
+              Price alerts will be connected in the next
+              step.
+            </small>
+          </div>
+        </section>
       )}
 
       <nav>
