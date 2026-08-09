@@ -226,6 +226,33 @@ header small {
   font-size: 11px;
 }
 
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  margin-top: 14px;
+  padding: 8px 10px;
+  border: 1px solid rgba(129, 70, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(129, 70, 255, 0.08);
+  color: #b889ff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.sync-pill.warning {
+  border-color: rgba(247, 174, 68, 0.3);
+  background: rgba(247, 174, 68, 0.1);
+  color: #f1b563;
+}
+
+.sync-pill span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .best-deal {
   margin: 22px 0 28px;
   padding: 18px;

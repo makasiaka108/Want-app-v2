@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bell,
   Check,
+  Cloud,
   ExternalLink,
   Heart,
   Home,
@@ -61,7 +62,13 @@ type Wish = Deal & {
   }>;
 };
 
-const WISHES_STORAGE_KEY = "want.wishes.v1";
+type WishesResponse = {
+  wishes?: Wish[];
+  wish?: Wish;
+  error?: string;
+};
+
+const DEVICE_STORAGE_KEY = "want.device.id";
 
 function formatPrice(price: number | null | undefined) {
   if (typeof price !== "number") return "—";
@@ -79,40 +86,19 @@ function openDeal(link?: string) {
   window.open(link, "_blank", "noopener,noreferrer");
 }
 
-function createWish(deal: Deal, query: string): Wish {
-  const now = new Date().toISOString();
+function getOrCreateDeviceId() {
+  const existing = window.localStorage.getItem(DEVICE_STORAGE_KEY);
 
-  return {
-    ...deal,
-    wishId: deal.id || `${deal.title}-${deal.source}-${deal.price}`,
-    query,
-    addedAt: now,
-    lastCheckedAt: now,
-    initialPrice: deal.price,
-    currentPrice: deal.price,
-    priceHistory: [
-      {
-        date: now,
-        price: deal.price,
-      },
-    ],
-  };
-}
+  if (existing) return existing;
 
-function readStoredWishes() {
-  if (typeof window === "undefined") return [];
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  try {
-    const raw = window.localStorage.getItem(WISHES_STORAGE_KEY);
+  window.localStorage.setItem(DEVICE_STORAGE_KEY, id);
 
-    if (!raw) return [];
-
-    const parsed = JSON.parse(raw);
-
-    return Array.isArray(parsed) ? (parsed as Wish[]) : [];
-  } catch {
-    return [];
-  }
+  return id;
 }
 
 export default function Page() {
@@ -126,25 +112,54 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [wishes, setWishes] = useState<Wish[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [syncStatus, setSyncStatus] = useState<
+    "idle" | "loading" | "saving" | "ready" | "error"
+  >("idle");
+  const [syncMessage, setSyncMessage] = useState("Cloud sync ready");
 
-  const savedIds = useMemo(
-    () => new Set(wishes.map((wish) => wish.wishId)),
+  const savedDealIds = useMemo(
+    () => new Set(wishes.map((wish) => wish.id)),
     [wishes]
   );
-
-  useEffect(() => {
-    setWishes(readStoredWishes());
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(WISHES_STORAGE_KEY, JSON.stringify(wishes));
-  }, [wishes]);
 
   const trackedValue = wishes.reduce((sum, wish) => sum + wish.currentPrice, 0);
   const bestSavedScore = wishes.reduce(
     (score, wish) => Math.max(score, wish.wantScore),
     0
   );
+
+  useEffect(() => {
+    setDeviceId(getOrCreateDeviceId());
+  }, []);
+
+  useEffect(() => {
+    if (!deviceId) return;
+
+    loadWishes(deviceId);
+  }, [deviceId]);
+
+  async function loadWishes(id: string) {
+    setSyncStatus("loading");
+    setSyncMessage("Loading Wishes from Supabase...");
+
+    try {
+      const response = await fetch(`/api/wishes?deviceId=${encodeURIComponent(id)}`);
+      const data: WishesResponse = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load Wishes");
+      }
+
+      setWishes(Array.isArray(data.wishes) ? data.wishes : []);
+      setSyncStatus("ready");
+      setSyncMessage("Wishes synced with Supabase");
+    } catch (err) {
+      console.error(err);
+      setSyncStatus("error");
+      setSyncMessage("Supabase sync needs setup");
+    }
+  }
 
   async function handleSearch() {
     const cleanQuery = query.trim();
@@ -179,7 +194,9 @@ export default function Page() {
       setProducts(Array.isArray(data.products) ? data.products : []);
       setBestDeal(data.bestDeal || null);
       setAnalyzedOffers(data.analyzedOffers || data.totalFound || 0);
-      setMedianPrice(typeof data.medianPrice === "number" ? data.medianPrice : null);
+      setMedianPrice(
+        typeof data.medianPrice === "number" ? data.medianPrice : null
+      );
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -188,24 +205,90 @@ export default function Page() {
     }
   }
 
-  function trackDeal(deal: Deal) {
-    const wish = createWish(deal, lastSearch || query || deal.title);
+  async function trackDeal(deal: Deal) {
+    if (!deviceId || syncStatus === "saving") return;
 
-    setWishes((current) => {
-      if (current.some((item) => item.wishId === wish.wishId)) {
-        return current.filter((item) => item.wishId !== wish.wishId);
+    const existing = wishes.find((wish) => wish.id === deal.id);
+
+    if (existing) {
+      await removeWish(existing.wishId);
+      return;
+    }
+
+    setSyncStatus("saving");
+    setSyncMessage("Saving to Supabase...");
+
+    try {
+      const response = await fetch("/api/wishes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          deviceId,
+          query: lastSearch || query || deal.title,
+          deal,
+        }),
+      });
+
+      const data: WishesResponse = await response.json();
+
+      if (!response.ok || !data.wish) {
+        throw new Error(data.error || "Failed to save Wish");
       }
 
-      return [wish, ...current];
-    });
+      setWishes((current) => [
+        data.wish!,
+        ...current.filter((wish) => wish.id !== data.wish!.id),
+      ]);
+
+      setTab("Wishes");
+      setSyncStatus("ready");
+      setSyncMessage("Saved to Supabase");
+    } catch (err) {
+      console.error(err);
+      setSyncStatus("error");
+      setSyncMessage("Could not save Wish");
+    }
   }
 
-  function removeWish(wishId: string) {
+  async function removeWish(wishId: string) {
+    if (!deviceId || syncStatus === "saving") return;
+
+    const previous = wishes;
+
     setWishes((current) => current.filter((wish) => wish.wishId !== wishId));
+    setSyncStatus("saving");
+    setSyncMessage("Removing from Supabase...");
+
+    try {
+      const response = await fetch(
+        `/api/wishes/${encodeURIComponent(wishId)}?deviceId=${encodeURIComponent(
+          deviceId
+        )}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to remove Wish");
+      }
+
+      setSyncStatus("ready");
+      setSyncMessage("Wishes synced with Supabase");
+    } catch (err) {
+      console.error(err);
+      setWishes(previous);
+      setSyncStatus("error");
+      setSyncMessage("Could not remove Wish");
+    }
   }
 
   function isTracked(deal: Deal) {
-    return savedIds.has(deal.id);
+    return savedDealIds.has(deal.id);
   }
 
   function DealBadges({ deal }: { deal: Deal }) {
@@ -237,6 +320,20 @@ export default function Page() {
     );
   }
 
+  function SyncPill() {
+    return (
+      <div className={`sync-pill ${syncStatus === "error" ? "warning" : ""}`}>
+        {syncStatus === "loading" || syncStatus === "saving" ? (
+          <LoaderCircle size={13} className="spin" />
+        ) : (
+          <Cloud size={13} />
+        )}
+
+        <span>{syncMessage}</span>
+      </div>
+    );
+  }
+
   function SearchView() {
     return (
       <>
@@ -252,8 +349,8 @@ export default function Page() {
 
           <p>
             Enter a product name. WANT searches live shopping offers, scores
-            product match, seller trust and price quality, then prepares the
-            best deals for tracking.
+            product match, seller trust and price quality, then saves tracked
+            Wishes to Supabase.
           </p>
 
           <div className="ask">
@@ -274,6 +371,8 @@ export default function Page() {
               {loading ? <LoaderCircle className="spin" /> : <ArrowRight />}
             </button>
           </div>
+
+          <SyncPill />
         </section>
 
         {loading && (
@@ -457,8 +556,8 @@ export default function Page() {
 
               <p>
                 The score combines product matching, seller trust, price quality,
-                ratings and review signals. Price tracking is ready once you save
-                it to Wishes.
+                ratings and review signals. Saving now creates a price-history
+                row in Supabase.
               </p>
             </div>
 
@@ -486,10 +585,11 @@ export default function Page() {
           </h1>
 
           <p>
-            Saved deals stay on this device with their first observed price and
-            a tracking-ready history. Automatic refresh will plug into this list
-            next.
+            Saved deals now sync to Supabase with their first observed price,
+            current price and tracking-ready price history.
           </p>
+
+          <SyncPill />
         </section>
 
         <section className="stats">
@@ -513,7 +613,7 @@ export default function Page() {
           <section className="empty-state">
             <Sparkles />
             <b>No wishes yet</b>
-            <p>Search a product and tap Track price to save it here.</p>
+            <p>Search a product and tap Track price to save it to Supabase.</p>
           </section>
         ) : (
           <section className="cards live-cards wish-cards">
@@ -532,7 +632,9 @@ export default function Page() {
                     <DealBadges deal={wish} />
 
                     <div className="price-history">
-                      <span>Added {new Date(wish.addedAt).toLocaleDateString()}</span>
+                      <span>
+                        Added {new Date(wish.addedAt).toLocaleDateString()}
+                      </span>
                       <span>
                         {delta === 0
                           ? "No price change yet"
@@ -543,7 +645,7 @@ export default function Page() {
 
                   <aside>
                     <b>{formatPrice(wish.currentPrice)}</b>
-                    <small>TRACKING</small>
+                    <small>SYNCED</small>
 
                     <div className="mini-actions">
                       <button
